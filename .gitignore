@@ -1,0 +1,13 @@
+# data & model artifacts
+EDA/
+*.csv
+*.dbf
+*.shp
+*.shx
+*.prj
+*.cpg
+*.zip
+*.joblib
+*.sav
+*.model
+*.parquet
