@@ -8,19 +8,6 @@ EDA/*
 !EDA/*.ipynb
 !EDA/**/*.ipynb
 
-# data & model artifacts
-EDA/
-*.csv
-*.dbf
-*.shp
-*.shx
-*.prj
-*.cpg
-*.zip
-*.joblib
-*.sav
-*.model
-*.parquet
 # IDE / Python
 .idea/
 .vscode/
