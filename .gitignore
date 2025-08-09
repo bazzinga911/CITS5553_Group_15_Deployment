@@ -1,0 +1,29 @@
+# Ignore everything in EDA...
+EDA/*
+
+# ...but not the folder itself
+!EDA/
+
+# ...and not any .ipynb notebooks in it or subfolders
+!EDA/*.ipynb
+!EDA/**/*.ipynb
+
+# data & model artifacts
+EDA/
+*.csv
+*.dbf
+*.shp
+*.shx
+*.prj
+*.cpg
+*.zip
+*.joblib
+*.sav
+*.model
+*.parquet
+# IDE / Python
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
