@@ -1,16 +1,19 @@
-# Ignore everything in EDA...
-EDA/*
-
-# ...but not the folder itself
-!EDA/
-
-# ...and not any .ipynb notebooks in it or subfolders
-!EDA/*.ipynb
-!EDA/**/*.ipynb
-
-# IDE / Python
-.idea/
-.vscode/
-__pycache__/
-*.pyc
-.ipynb_checkpoints/
+/.idea/
+/experimental/Te_ppm_DL_S_SOWETO.cpg
+/experimental/Te_ppm_DL_S_SOWETO.csv
+/experimental/Te_ppm_DL_S_SOWETO.dbf
+/experimental/Te_ppm_DL_S_SOWETO.parquet
+/experimental/Te_ppm_DL_S_SOWETO.prj
+/experimental/Te_ppm_DL_S_SOWETO.shp
+/experimental/Te_ppm_DL_S_SOWETO.shx
+/experimental/Te_ppm_DL_S_SOWETO.zip
+/experimental/Te_ppm_Orig_S_SOWETO.cpg
+/experimental/Te_ppm_Orig_S_SOWETO.csv
+/experimental/Te_ppm_Orig_S_SOWETO.dbf
+/experimental/Te_ppm_Orig_S_SOWETO.parquet
+/experimental/Te_ppm_Orig_S_SOWETO.prj
+/experimental/Te_ppm_Orig_S_SOWETO.shp
+/experimental/Te_ppm_Orig_S_SOWETO.shx
+/experimental/Te_ppm_Orig_S_SOWETO.zip
+/experimental/dl_tree.joblib
+/experimental/orig_tree.joblib
