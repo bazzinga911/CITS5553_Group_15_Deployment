@@ -6,6 +6,9 @@ from pathlib import Path
 import subprocess
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+from zipfile import ZipFile, BadZipFile
+from werkzeug.utils import secure_filename
+import traceback
 
 # ---- Paths ----
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +33,54 @@ def _latest_session_dir() -> Path | None:
         return None
     return max(sessions, key=lambda p: p.stat().st_mtime)
 
+ALLOWED_DATA_EXTS = {".parquet", ".csv", ".geojson", ".json", ".shp"}
+
+def _extract_if_zip(path: Path, dest_dir: Path) -> list[Path]:
+    """If `path` is a .zip, extract its files into `dest_dir` and return the new file paths.
+       Otherwise return [path]."""
+    if path.suffix.lower() != ".zip":
+        return [path]
+    extracted = []
+    try:
+        with ZipFile(path, "r") as zf:
+            for name in zf.namelist():
+                if name.endswith("/"):  # skip dirs
+                    continue
+                safe_name = secure_filename(Path(name).name)
+                target = dest_dir / safe_name
+                with zf.open(name) as src, open(target, "wb") as dst:
+                    dst.write(src.read())
+                extracted.append(target)
+    except BadZipFile:
+        raise ValueError(f"Uploaded file {path.name} is not a valid zip")
+    return extracted
+
+def _pick_two_inputs(candidates: list[Path]) -> tuple[Path, Path]:
+    """Choose orig & dl files from a list (prefer names containing 'orig'/'dl')."""
+    data = []
+    seen_shp = set()
+    for p in candidates:
+        ext = p.suffix.lower()
+        if ext in ALLOWED_DATA_EXTS:
+            # Keep one .shp per basename (sidecars will sit beside it)
+            if ext == ".shp":
+                if p.stem in seen_shp:
+                    continue
+                seen_shp.add(p.stem)
+            data.append(p)
+
+    def find_kw(kw):
+        for q in data:
+            if kw in q.name.lower():
+                return q
+        return None
+
+    orig = find_kw("orig")
+    dl   = find_kw("dl")
+    if orig and dl:
+        return orig, dl
+    return data[0], data[1]
+
 @app.post("/run-comparison")
 def run_comparison():
     files = request.files.getlist("files")
@@ -39,20 +90,24 @@ def run_comparison():
     upload_dir = _session_dir(UPLOAD_DIR)
     out_dir    = _session_dir(RESULTS_DIR)
 
-    saved = []
+    # Save uploads (secure file names)
+    saved_paths = []
     for f in files:
-        dest = upload_dir / f.filename
+        fname = secure_filename(f.filename)
+        dest = upload_dir / fname
         f.save(dest.as_posix())
-        saved.append(dest)
+        saved_paths.append(dest)
 
-    def pick(paths, kw):
-        for p in paths:
-            if kw.lower() in p.name.lower():
-                return p
-        return None
+    # Expand any zips into the same session upload dir
+    expanded = []
+    for p in saved_paths:
+        expanded.extend(_extract_if_zip(p, upload_dir))
 
-    orig = pick(saved, "orig") or saved[0]
-    dl   = pick(saved, "dl")   or saved[1]
+    # Pick orig & dl from the expanded list
+    try:
+        orig, dl = _pick_two_inputs(expanded)
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
 
     env = os.environ.copy()
     env["PYTHONPATH"] = (
