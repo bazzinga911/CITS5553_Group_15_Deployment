@@ -7,3 +7,8 @@ pyproj>=3.6
 fiona>=1.9
 fsspec>=2024.2
 s3fs>=2024.2   # only if you’ll read/write s3:// paths
+
+Flask>=3.0
+flask-cors>=4.0
+scipy>=1.14
+
