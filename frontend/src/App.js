@@ -7,10 +7,30 @@ function App() {
   const [file1, setFile1] = useState(null);
   const [file2, setFile2] = useState(null);
 
-  // Reset everything
   const handleReset = () => {
     setFile1(null);
     setFile2(null);
+  };
+
+  const runComparison = async () => {
+    try {
+      if (!file1 || !file2) return;
+      const form = new FormData();
+      form.append("files", file1);
+      form.append("files", file2);
+      const res = await fetch("http://127.0.0.1:5000/run-comparison", {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      console.log("Run Comparison response:", data);
+    } catch (e) {
+      console.error("Run Comparison failed:", e);
+    }
+  };
+
+  const exportCellPoints = () => {
+    window.location.href = "http://127.0.0.1:5000/export/comp-grid.csv";
   };
 
   return (
@@ -44,6 +64,7 @@ function App() {
           >
             Upload
           </button>
+          <button onClick={handleReset}>Reset</button>
         </div>
       </div>
 
@@ -55,16 +76,7 @@ function App() {
             <p>
               Mineral exploration in Western Australia is a critical activity
               that supports the greater mining industry by discovering and
-              defining critical resource deposits. The earliest phase of
-              exploration seeks to identify regions which likely contain
-              precious minerals at economic scale. Typical indicators include:
-              High-grade drillhole intercepts which are open along strike or at
-              depth; The presence of ‘partner minerals’ which correlate with the
-              presence of the mineral of interest; Economic-level interpolated
-              or imputed values which are yet untested by real sampling. Early
-              explorations are further supported and enhanced by
-              government-hosted public datasets of exploration drillhole
-              records.
+              defining critical resource deposits...
             </p>
           </>
         )}
@@ -73,39 +85,7 @@ function App() {
           <>
             <h2>About The Project</h2>
             <p>
-              This project focuses on Tellurium (Te) assay values within a subset
-              of this publicly hosted data. Tellurium is a critical
-              mineral/metal of high significance globally and recently
-              identified as a key pathfinder element for gold exploration in WA.
-              A recent study generated a derived dataset containing imputed
-              values for samples where Te was not originally analysed. The
-              imputed values introduce new information that could guide
-              exploration decisions, particularly in identifying prospective
-              zones where Te may have been missed during the initial sampling
-              phase.
-        
-              The primary objective of the project is to provide a platform which
-              allows an explorer to easily compare the original laboratory assay
-              results with the imputed values and quickly identify areas with
-              significant deviation between the datasets which may indicate
-              prospective but unexplored regions. Within a typical environment,
-              at full scale of the data, differences between the original and
-              imputed datasets are not easily visualised or interpreted using
-              traditional methods. This project will trial data analysis and
-              visualisation techniques to detect patterns and highlight zones of
-              divergence between datasets. A combination of exploratory data
-              analysis, geostatistical comparisons, and visualisation tools will
-              aim to reveal “hidden” exploration targets that would otherwise be
-              overlooked by the human eye.
-    
-              While this proof-of-concept will focus on Te, the broader aim is to
-              design a flexible analytical platform that could extend to other
-              elements. Users would be able to input their own paired datasets
-              (original and imputed) for different elements, allowing for
-              scalable and element-agnostic geoscientific analysis. The outcome
-              will support smarter targeting decisions in mineral exploration,
-              combining machine-aided inference with interactive visual
-              interpretation.
+              This project focuses on Tellurium (Te) assay values...
             </p>
           </>
         )}
@@ -113,26 +93,26 @@ function App() {
         {activePage === "upload" && (
           <>
             <h2>Upload Your Files</h2>
-            <p>
-              Please upload <strong>2 files</strong>:
-            </p>
+            <p>Please upload <strong>2 files</strong>:</p>
 
             <div>
               <label>
-                Choose File 1:
+                Original GeoParquet:{" "}
                 <input
                   type="file"
+                  accept=".parquet,.geoparquet"
                   onChange={(e) => setFile1(e.target.files[0])}
                 />
                 {file1 && <span> ✅</span>}
               </label>
             </div>
 
-            <div>
+            <div style={{ marginTop: "10px" }}>
               <label>
-                Choose File 2:
+                Imputed (DL) GeoParquet:{" "}
                 <input
                   type="file"
+                  accept=".parquet,.geoparquet"
                   onChange={(e) => setFile2(e.target.files[0])}
                 />
                 {file2 && <span> ✅</span>}
@@ -140,8 +120,12 @@ function App() {
             </div>
 
             <div style={{ marginTop: "15px" }}>
-              <button disabled={!file1 || !file2}>Run Comparison</button>
-              <button disabled={!file1 || !file2}>Export Cell Points</button>
+              <button disabled={!file1 || !file2} onClick={runComparison}>
+                Run Comparison
+              </button>
+              <button onClick={exportCellPoints}>
+                Export Cell Points
+              </button>
               <button onClick={handleReset}>Reset</button>
             </div>
           </>
