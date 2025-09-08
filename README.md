@@ -14,7 +14,7 @@ This is the React + Vite frontend for the **ESRI Comparison Tool**. It provides 
 ### 2. Install dependencies
 
 ```bash
-cd frontend
+cd frontend-esri
 npm install
 ```
 
