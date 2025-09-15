@@ -160,5 +160,42 @@ def dataframe_from_upload(upload: UploadFile) -> pd.DataFrame:
         return _read_csv_bytes_to_df(csv_bytes)
 
 
+# --- FAST column-only readers for plots ---
+def _read_csv_bytes_to_df_cols(raw: bytes, usecols: List[str]) -> pd.DataFrame:
+    candidates = []
+    candidates.append(_detect_encoding(raw[:4096]))
+    for c in ("utf-8-sig", "utf-8", "latin-1"):
+        if c not in candidates:
+            candidates.append(c)
+
+    last_err: Optional[Exception] = None
+    for enc in candidates:
+        try:
+            df = pd.read_csv(io.BytesIO(raw), encoding=enc, usecols=usecols, low_memory=False)
+            logger.info("DataFrame (cols=%s) read with encoding=%s; shape=%s", usecols, enc, df.shape)
+            return df
+        except Exception as e:
+            last_err = e
+            logger.warning("DataFrame (cols=%s) read failed with encoding=%s: %s", usecols, enc, e)
+
+    raise ValueError(f"Could not read CSV with candidate encodings; last error: {last_err}")
+
+
+def dataframe_from_upload_cols(upload: UploadFile, usecols: List[str]) -> pd.DataFrame:
+    fname = (upload.filename or "").lower()
+    logger.info("dataframe_from_upload_cols: filename=%s usecols=%s", upload.filename, usecols)
+
+    upload.file.seek(0)
+    raw = upload.file.read()
+    upload.file.seek(0)
+
+    if fname.endswith(".csv"):
+        return _read_csv_bytes_to_df_cols(raw, usecols)
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        _, csv_bytes = _pick_first_csv_from_zip(zf)
+        return _read_csv_bytes_to_df_cols(csv_bytes, usecols)
+
+
 def make_run_token() -> str:
     return uuid.uuid4().hex

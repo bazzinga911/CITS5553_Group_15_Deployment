@@ -1,64 +1,126 @@
-# Frontend (React + Vite)
+# ESRI Comparison Tool
 
-This is the React + Vite frontend for the **ESRI Comparison Tool**. It provides the user interface to upload data, run comparisons, and visualize results as interactive heatmaps.
+A full-stack tool for comparing original vs deep-learning imputed assay data.
+Frontend is built with **React + Vite**, and backend is built with **FastAPI**.
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Frontend (React + Vite)
 
 ### 1. Prerequisites
 
-* **Node.js** v20 or later
-* **npm** v9 or later (comes with Node)
+* Node.js 20+
+* npm 9+
 
-### 2. Install dependencies
+### 2. Setup
 
 ```bash
 cd frontend-esri
 npm install
-```
-
-### 3. Run the development server
-
-```bash
 npm run dev
 ```
 
-* The app will start at [http://localhost:5173](http://localhost:5173)
-* Any code changes will hot-reload automatically.
+* App runs at [http://localhost:5173](http://localhost:5173)
+* Code changes hot-reload automatically
 
-### 4. Build for production
+### 3. Production build
 
 ```bash
 npm run build
 npm run preview
 ```
 
----
-
-## 📂 Project Structure
+### 4. Structure
 
 ```
 frontend-esri/
  ├─ src/               # React components & app logic
  ├─ public/            # Static assets
- ├─ package.json       # Project dependencies & scripts
- ├─ vite.config.ts     # Vite configuration
- ├─ tsconfig.json      # TypeScript configuration
- ├─ tailwind.config.js # Tailwind CSS configuration
- ├─ postcss.config.js  # PostCSS configuration
+ ├─ package.json       # Scripts & deps
+ ├─ vite.config.ts     # Vite config
+ ├─ tsconfig.json      # TypeScript config
+ ├─ tailwind.config.js # Tailwind config
+ ├─ postcss.config.js  # PostCSS config
 ```
+
+### 5. Common issues
+
+* **“vite is not recognized” (Windows)**
+  Run `npm install`, then `npx vite` or `npm run dev`.
+  If it still fails, delete `node_modules` and `package-lock.json`, then reinstall.
+
+* **Port already in use (5173)**
+  `npm run dev -- --port 5174` (or kill the process using 5173).
 
 ---
 
-## 👥 For Teammates
+## ⚙️ Backend (FastAPI)
 
-After installing nodejs, npm and cloning the repo:
+The backend handles data upload, cleaning, statistics, and plots.
+
+### 1. Prerequisites
+
+* Python 3.10+
+* pip
+* `venv` for virtual environments
+
+### 2. Setup
 
 ```bash
-cd frontend-esri
-npm install
-npm run dev
+cd backend-esri
+
+# create and activate venv
+python -m venv venv
+source venv/bin/activate   # Mac/Linux
+venv\Scripts\activate      # Windows
+
+# install dependencies
+pip install -r requirements.txt
 ```
 
-That’s it 🎉
+### 3. Run the server
+
+```bash
+uvicorn app.main:app --reload
+```
+
+* Server: [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+### 4. Structure
+
+```
+backend/
+ ├─ app/
+ │   ├─ main.py             # FastAPI entrypoint & router registration
+ │   ├─ models/schemas.py   # Pydantic models for API responses
+ │   ├─ routers/
+ │   │   ├─ data.py         # /api/data endpoints (column extraction)
+ │   │   └─ analysis.py     # /api/analysis endpoints (stats & plots)
+ │   └─ services/
+ │       └─ io_service.py   # CSV/ZIP parsing, encoding detection, DataFrame utils
+ ├─ requirements.txt
+```
+
+### 5. Key API endpoints
+
+* `POST /api/data/columns` — extract column names from CSV/ZIP
+* `POST /api/analysis/summary` — get stats (count, mean, median, max, std)
+* `POST /api/analysis/plots` — histograms + QQ plot as base64 PNGs
+* `GET /api/health` — backend health check
+
+### 6. Common issues
+
+* **Module not found**: Always run `uvicorn` from inside `backend/`.
+* **Port already in use**: Run `uvicorn app.main:app --reload --port 8000`.
+---
+
+## 🔗 Frontend + Backend integration
+
+* CORS is already enabled in the backend for `http://localhost:5173`.
+* When you run both services:
+
+  * Start backend first: `uvicorn app.main:app --reload`
+  * Then start frontend: `npm run dev`
+* The frontend automatically calls the backend at `http://127.0.0.1:8000/api/...`.
+
+---

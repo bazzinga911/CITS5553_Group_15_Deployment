@@ -1,21 +1,17 @@
 import React, { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  Upload, FileArchive, Trash2, CheckCircle2, AlertCircle, Sparkles, X, BarChart3, GitCompare, Download, Info, LayoutGrid} from "lucide-react";
+import { Upload, FileArchive, Trash2, CheckCircle2, AlertCircle, Sparkles, X, BarChart3, GitCompare, Download, Info, LayoutGrid } from "lucide-react";
 import JSZip from "jszip";
 import * as THREE from "three";
 import ComparisonHeatmap from "./components/ComparisonHeatmap";
-import { createRun } from "./api/runs";
+import { fetchColumns } from "./api/data";
+import { runSummary, runPlots } from "./api/analysis";
 
-/**
- * ESRI 3D Comparison — Inline files lists
- * - Stepper hidden on About.
- * - Steps: 1 Original, 2 DL, 3 Mapping, 4 Method, 5 Grid, 6 Plot.
- * - Step 3 “Mapping” ticks after “Run Analysis” is pressed.
- * - File lists now render under Load Data, Original at left and DL at right.
- */
-
-const isZipName = (name: string) => name.toLowerCase().trim().endsWith(".zip");
+const isAcceptedName = (name: string) => {
+  const lower = name.toLowerCase().trim();
+  return lower.endsWith(".zip") || lower.endsWith(".csv");
+};
+const isAccepted = (file: File | null | undefined) => !!file && isAcceptedName(file.name);
 const clampPercent = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
 
 const REQUIRED_FIELD_KEYS = ["Northing", "Easting", "Assay"] as const;
@@ -48,6 +44,22 @@ export default function ESRI3DComparisonApp() {
 
   // Run Analysis in Data Analysis
   const [analysisRun, setAnalysisRun] = useState(false);
+
+  // --- Analysis stats (Original / DL) ---
+  type Summary = {
+    count: number;
+    mean: number | null;
+    median: number | null;
+    max: number | null;
+    std: number | null;
+  };
+  const [statsOriginal, setStatsOriginal] = useState<Summary | null>(null);
+  const [statsDl, setStatsDl] = useState<Summary | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+
+  // --- Plots state ---
+  const [plotsLoading, setPlotsLoading] = useState(false);
+  const [plots, setPlots] = useState<{ original?: string; dl?: string; qq?: string }>({});
 
   // Comparison controls
   const [method, setMethod] = useState<null | "max" | "mean" | "median" | "chi2">(null);
@@ -95,7 +107,7 @@ export default function ESRI3DComparisonApp() {
 
   const [dataLoaded, setDataLoaded] = useState(false);
 
-  const isZip = (file: File | null | undefined) => !!file && isZipName(file.name);
+  const isZip = (file: File | null | undefined) => !!file && isAcceptedName(file.name);
 
   const validateAndSet = useCallback((file: File | null, kind: "original" | "dl") => {
     if (!file) {
@@ -104,8 +116,8 @@ export default function ESRI3DComparisonApp() {
       setErrors((e) => ({ ...e, [kind]: undefined }));
       return;
     }
-    if (!isZip(file)) {
-      setErrors((e) => ({ ...e, [kind]: "Only .zip files are accepted." }));
+    if (!isAccepted(file)) {
+      setErrors((e) => ({ ...e, [kind]: "Only .zip or .csv files are accepted." }));
       return;
     }
     setErrors((e) => ({ ...e, [kind]: undefined }));
@@ -205,6 +217,10 @@ export default function ESRI3DComparisonApp() {
 
   async function inspectZipColumns(file: File): Promise<string[]> {
     try {
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        // For CSV, fake columns (should parse header in real app)
+        return ["ID", "Northing", "Easting", "RL", "Assay", "Te_ppm", "Au_ppb", "Depth"];
+      }
       const buf = await file.arrayBuffer();
       await JSZip.loadAsync(buf);
       return ["ID", "Northing", "Easting", "RL", "Assay", "Te_ppm", "Au_ppb", "Depth"];
@@ -216,61 +232,97 @@ export default function ESRI3DComparisonApp() {
   async function onLoadData() {
     if (!originalZip || !dlZip || loadingColumns || dataLoaded) return;
     setLoadingColumns(true);
-    setOriginalList([]);
-    setDlList([]);
-    setProgress({ original: 0, dl: 0 });
-
-    const unzipAndList = async (file: File, which: "original" | "dl") => {
-      const buf = await file.arrayBuffer();
-      const zip = await JSZip.loadAsync(buf);
-      const entries = Object.values(zip.files);
-      const total = entries.length || 1;
-      const items: Array<{ name: string; size: number }> = [];
-
-      let lastT = 0; let lastPct = -1;
-      const bump = (i: number) => {
-        const now = performance.now();
-        const pct = clampPercent((i / total) * 100);
-        if (pct !== lastPct && (now - lastT > 80 || Math.abs(pct - lastPct) >= 2 || pct === 100)) {
-          lastT = now; lastPct = pct;
-          setProgress((p) => ({ ...p, [which]: pct }));
-        }
-      };
-
-      for (let i = 0; i < entries.length; i++) {
-        const zf: any = entries[i];
-        const approxSize = zf?._data?.uncompressedSize ?? 0;
-        items.push({ name: zf.name, size: approxSize });
-        bump(i + 1);
-        if (i % 100 === 0) await new Promise((r) => setTimeout(r, 0));
-      }
-      if (which === "original") setOriginalList(items); else setDlList(items);
-    };
+    setOriginalList([{ name: originalZip.name, size: originalZip.size }]);
+    setDlList([{ name: dlZip.name, size: dlZip.size }]);
+    setProgress({ original: 100, dl: 100 });
 
     try {
-      await Promise.all([
-        unzipAndList(originalZip, "original"),
-        unzipAndList(dlZip, "dl"),
-      ]);
-      const [a, b] = await Promise.all([
-        inspectZipColumns(originalZip),
-        inspectZipColumns(dlZip),
-      ]);
-      setOriginalColumns(a);
-      setDlColumns(b);
+      // Ask backend for real columns
+      const { original_columns, dl_columns } = await fetchColumns(originalZip, dlZip);
+
+      setOriginalColumns(original_columns);
+      setDlColumns(dl_columns);
+
+      // reset mappings so user re-selects
       setOriginalMap({});
       setDlMap({});
       setAnalysisRun(false);
+      setStatsOriginal(null);
+      setStatsDl(null);
       setDataLoaded(true);
+    } catch (e: any) {
+      // Show error and also clear loading state and progress
+      alert(e?.message || "Failed to read columns");
+      setDataLoaded(false);
+      setOriginalColumns([]);
+      setDlColumns([]);
+      setOriginalList([]);
+      setDlList([]);
+      setProgress({ original: 0, dl: 0 });
     } finally {
       setLoadingColumns(false);
     }
   }
 
+  // Run Analysis → clean assay (drop <= 0) & compute stats via backend
+  async function handleRunAnalysis() {
+    if (!originalZip || !dlZip) {
+      alert("Upload both files and click Load Data first.");
+      return;
+    }
+    const oAssay = originalMap["Assay"];
+    const dAssay = dlMap["Assay"];
+    if (!oAssay || !dAssay) {
+      alert("Select the Assay column on both sides.");
+      return;
+    }
+
+    setAnalysisLoading(true);
+    setStatsOriginal(null);
+    setStatsDl(null);
+
+    try {
+      const { original, dl } = await runSummary(originalZip, dlZip, oAssay, dAssay);
+      setStatsOriginal(original);
+      setStatsDl(dl);
+      setAnalysisRun(true);
+    } catch (err: any) {
+      console.error("Run Analysis failed:", err);
+      const msg = typeof err?.message === "string" ? err.message : "Run Analysis failed";
+      alert(msg);
+    } finally {
+      setAnalysisLoading(false);
+    }
+  }
+
+  // --- Plots handler ---
+  async function handleShowPlots() {
+    if (!originalZip || !dlZip) return;
+    const oAssay = originalMap["Assay"];
+    const dAssay = dlMap["Assay"];
+    if (!oAssay || !dAssay) {
+      alert("Select the Assay column on both sides.");
+      return;
+    }
+    try {
+      setPlotsLoading(true);
+      setPlots({});
+      const r = await runPlots(originalZip, dlZip, oAssay, dAssay);
+      setPlots({
+        original: `data:image/png;base64,${r.original_png}`,
+        dl: `data:image/png;base64,${r.dl_png}`,
+        qq: `data:image/png;base64,${r.qq_png}`,
+      });
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || "Failed to render plots");
+    } finally {
+      setPlotsLoading(false);
+    }
+  }
+
   async function onRun() {
     setRunError(null);
-    // setOriginalList([]); // Do not clear file lists
-    // setDlList([]); // Do not clear file lists
     setProgress({ original: 0, dl: 0 });
     setUnzipping(false);
     setRunId(null);
@@ -308,13 +360,82 @@ export default function ESRI3DComparisonApp() {
     alert(`Exporting ${type.toUpperCase()}… (wire to backend)`);
   }
 
+  // --- Reset helpers ---
+  function resetDataLoading() {
+    setOriginalZip(null);
+    setDlZip(null);
+    setErrors({});
+    setOriginalColumns([]);
+    setDlColumns([]);
+    setLoadingColumns(false);
+    setOriginalList([]);
+    setDlList([]);
+    setProgress({ original: 0, dl: 0 });
+    setDataLoaded(false);
+    // Reset file input elements so the same file can be re-uploaded
+    if (inputOriginalRef.current) inputOriginalRef.current.value = "";
+    if (inputDlRef.current) inputDlRef.current.value = "";
+    resetAnalysis();
+  }
+  function resetAnalysis() {
+    setOriginalMap({});
+    setDlMap({});
+    setAnalysisRun(false);
+    setStatsOriginal(null);
+    setStatsDl(null);
+    setPlots({}); // <-- clear plots state as well
+    setPlotsLoading(false); // <-- reset loading state for plots
+    resetComparison();
+  }
+  function resetComparison() {
+    setMethod(null);
+    setBins(10);
+    setGridSize(null);
+    setRunId(null);
+    setRunError(null);
+    setBusyRun(false);
+    setUnzipping(false);
+    // Dispose three.js visualization and clear plotRef
+    if (threeRef.current) safelyDisposeThree(plotRef.current);
+    if (plotRef.current && plotRef.current.firstChild) {
+      while (plotRef.current.firstChild) {
+        plotRef.current.removeChild(plotRef.current.firstChild);
+      }
+    }
+  }
+
   // Only enable Comparison after Run Analysis has been clicked
   const canGoToComparison = analysisRun;
+
+  // Lightbox state and helpers
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightboxTitle, setLightboxTitle] = useState<string>("");
+
+  function openLightbox(src: string, title: string) {
+    setLightboxSrc(src);
+    setLightboxTitle(title);
+    setLightboxOpen(true);
+  }
+
+  function closeLightbox() {
+    setLightboxOpen(false);
+    setLightboxSrc(null);
+    setLightboxTitle("");
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") closeLightbox();
+    }
+    if (lightboxOpen) document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [lightboxOpen]);
 
   return (
     <div className="min-h-screen bg-white text-[#111827] flex">
       {/* Sidebar */}
-      <aside className="hidden md:flex md:flex-col w-64 border-r border-neutral-200 bg-[#F9FAFB]">
+      <aside className="hidden md:flex md:flex-col fixed top-0 left-0 h-screen w-64 border-r border-neutral-200 bg-[#F9FAFB] z-30">
         <div className="px-4 pt-8 pb-4 flex items-start gap-3">
           <div className="rounded-2xl bg-[#7C3AED] text-white p-2 shadow-sm"><Sparkles className="h-5 w-5" /></div>
           <div>
@@ -354,7 +475,7 @@ export default function ESRI3DComparisonApp() {
       </aside>
 
       {/* Main */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 md:ml-64">
         <header>
           <div className="mx-auto max-w-6xl px-4 pt-8 pb-4 md:pt-10 md:pb-6">
             <div className="flex items-start gap-3 md:hidden">
@@ -384,14 +505,14 @@ export default function ESRI3DComparisonApp() {
         <SuccessToast toast={toast} onClose={() => setToast(null)} />
 
         <main className="mx-auto max-w-6xl px-4 pb-16">
-          {/* Data Loading */}
+          {/* Data Selection */}
           {section === "data-loading" && (
             <>
               <div className="grid gap-6 md:grid-cols-2">
                 <UploadPanel
                   step={1}
                   title="File Upload for Original ESRI Data"
-                  subtitle="Only .zip files are accepted. Drag & drop or click to browse."
+                  subtitle="Only .zip or .csv files are accepted. Drag & drop or click to browse."
                   file={originalZip}
                   error={errors.original}
                   onClear={() => validateAndSet(null, "original")}
@@ -399,13 +520,13 @@ export default function ESRI3DComparisonApp() {
                   onDragOver={(e: React.DragEvent<HTMLDivElement>) => onDragOver(e)}
                   onBrowse={() => inputOriginalRef.current?.click()}
                 >
-                  <input ref={inputOriginalRef} type="file" accept=".zip" className="hidden" onChange={(e) => handleInput(e, "original")} />
+                  <input ref={inputOriginalRef} type="file" accept=".zip,.csv" className="hidden" onChange={(e) => handleInput(e, "original")} />
                 </UploadPanel>
 
                 <UploadPanel
                   step={2}
                   title="File Upload for DL ESRI Data"
-                  subtitle="Only .zip files are accepted. Drag & drop or click to browse."
+                  subtitle="Only .zip or .csv files are accepted. Drag & drop or click to browse."
                   file={dlZip}
                   error={errors.dl}
                   onClear={() => validateAndSet(null, "dl")}
@@ -413,7 +534,7 @@ export default function ESRI3DComparisonApp() {
                   onDragOver={(e: React.DragEvent<HTMLDivElement>) => onDragOver(e)}
                   onBrowse={() => inputDlRef.current?.click()}
                 >
-                  <input ref={inputDlRef} type="file" accept=".zip" className="hidden" onChange={(e) => handleInput(e, "dl")} />
+                  <input ref={inputDlRef} type="file" accept=".zip,.csv" className="hidden" onChange={(e) => handleInput(e, "dl")} />
                 </UploadPanel>
               </div>
 
@@ -435,9 +556,17 @@ export default function ESRI3DComparisonApp() {
                     </span>
                   )}
                 </button>
+                {dataLoaded && (
+                  <button
+                    type="button"
+                    className="ml-2 rounded-xl px-4 py-2 text-sm font-medium bg-neutral-200 text-neutral-700 hover:bg-neutral-300 transition"
+                    onClick={resetDataLoading}
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
 
-              {/* Inline file lists below the Load button */}
               {(loadingColumns || dataLoaded) && (
                 <section className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-5">
                   <ZipList
@@ -453,6 +582,17 @@ export default function ESRI3DComparisonApp() {
                     accent="#F59E0B"
                   />
                 </section>
+              )}
+
+              {dataLoaded && !!originalZip && !!dlZip && (
+                <div className="mt-6 flex justify-end">
+                  <button
+                    className="rounded-xl px-5 py-2.5 text-sm font-medium bg-[#7C3AED] text-white hover:bg-[#6D28D9] transition"
+                    onClick={() => setSection("data-analysis")}
+                  >
+                    Go to Data Analysis
+                  </button>
+                </div>
               )}
             </>
           )}
@@ -470,26 +610,140 @@ export default function ESRI3DComparisonApp() {
                   <MappingForm title="DL" columns={dlColumns} mapping={dlMap} onChange={setDlMap} />
                 </div>
 
-                <div className="mt-5">
+                <div className="mt-5 flex items-center gap-2">
                   <button
-                    onClick={() => setAnalysisRun(true)}
-                    disabled={!mappingComplete}
+                    onClick={handleRunAnalysis}
+                    disabled={!mappingComplete || analysisRun || analysisLoading}
                     className={
-                      "rounded-xl px-5 py-2.5 text-sm font-medium transition " +
-                      (mappingComplete ? "bg-[#7C3AED] text-white hover:bg-[#6D28D9]" : "bg-neutral-200 text-neutral-500 cursor-not-allowed")
+                      "rounded-xl px-5 py-2.5 text-sm font-medium transition flex items-center gap-2 " +
+                      (mappingComplete && !analysisRun && !analysisLoading
+                        ? "bg-[#7C3AED] text-white hover:bg-[#6D28D9]"
+                        : "bg-neutral-200 text-neutral-500 cursor-not-allowed")
                     }
                   >
-                    Run Analysis
+                    {analysisLoading ? "Analysing…" : "Run Analysis"}
+                    {analysisRun && !analysisLoading && (
+                      <span className="inline-flex items-center text-[#10B981] ml-2">
+                        <CheckCircle2 className="h-5 w-5" />
+                      </span>
+                    )}
                   </button>
+                  <button
+                    onClick={handleShowPlots}
+                    disabled={!analysisRun || plotsLoading || !!(plots.original && plots.dl && plots.qq)}
+                    className={
+                      "rounded-xl px-5 py-2.5 text-sm font-medium transition flex items-center gap-2 " +
+                      (
+                        !analysisRun || plotsLoading
+                          ? "bg-neutral-200 text-neutral-500 cursor-not-allowed"
+                          : (!plots.original || !plots.dl || !plots.qq)
+                            ? "bg-[#7C3AED] text-white hover:bg-[#6D28D9]"
+                            : "bg-neutral-200 text-neutral-500 cursor-not-allowed"
+                      )
+                    }
+                  >
+                    {plotsLoading
+                      ? "Rendering…"
+                      : (plots.original && plots.dl && plots.qq)
+                        ? (
+                          <>
+                            Show Plots
+                            <span className="inline-flex items-center text-[#10B981] ml-2">
+                              <CheckCircle2 className="h-5 w-5" />
+                            </span>
+                          </>
+                        )
+                        : "Show Plots"
+                    }
+                  </button>
+                  {analysisRun && !analysisLoading && (
+                    <button
+                      type="button"
+                      className="ml-2 rounded-xl px-4 py-2 text-sm font-medium bg-neutral-200 text-neutral-700 hover:bg-neutral-300 transition"
+                      onClick={resetAnalysis}
+                    >
+                      Clear
+                    </button>
+                  )}
                 </div>
 
-                {analysisRun && (
+                {/* Only show stats after analysis is done */}
+                {analysisRun && !analysisLoading && (
                   <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <InfoCard label="Assay — mean" value="—" hint="Connect backend" />
-                    <InfoCard label="Assay — median" value="—" hint="Connect backend" />
-                    <InfoCard label="Assay — max" value="—" hint="Connect backend" />
-                    <InfoCard label="Assay — std" value="—" hint="Connect backend" />
+                    <InfoCard label="Assay - mean"   value={`${fmt(statsOriginal?.mean)} / ${fmt(statsDl?.mean)}`}   hint="Original / DL" />
+                    <InfoCard label="Assay - median" value={`${fmt(statsOriginal?.median)} / ${fmt(statsDl?.median)}`} hint="Original / DL" />
+                    <InfoCard label="Assay - max"    value={`${fmt(statsOriginal?.max)} / ${fmt(statsDl?.max)}`}     hint="Original / DL" />
+                    <InfoCard label="Assay - std"    value={`${fmt(statsOriginal?.std)} / ${fmt(statsDl?.std)}`}     hint="Original / DL" />
                   </div>
+                )}
+
+                {/* Plots gallery */}
+                {analysisRun && !analysisLoading && (plots.original || plots.dl || plots.qq) && (
+                  <section className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="rounded-2xl border border-neutral-200 bg-white p-3">
+                      <div className="text-sm font-medium mb-2">Original histogram</div>
+                      {plots.original ? (
+                        <button
+                          type="button"
+                          onClick={() => plots.original && openLightbox(plots.original, "Original histogram")}
+                          className="block w-full cursor-zoom-in"
+                          aria-label="Open Original histogram"
+                        >
+                          <img
+                            src={plots.original}
+                            alt="Original histogram"
+                            className="w-full h-[260px] object-contain rounded-xl bg-[#F9FAFB] border border-neutral-100"
+                          />
+                        </button>
+                      ) : (
+                        <div className="h-[260px] grid place-items-center text-sm text-neutral-500 bg-[#F9FAFB] rounded-xl border border-neutral-100">
+                          No plot yet
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-2xl border border-neutral-200 bg-white p-3">
+                      <div className="text-sm font-medium mb-2">DL histogram</div>
+                      {plots.dl ? (
+                        <button
+                          type="button"
+                          onClick={() => plots.dl && openLightbox(plots.dl, "DL histogram")}
+                          className="block w-full cursor-zoom-in"
+                          aria-label="Open DL histogram"
+                        >
+                          <img
+                            src={plots.dl}
+                            alt="DL histogram"
+                            className="w-full h-[260px] object-contain rounded-xl bg-[#F9FAFB] border border-neutral-100"
+                          />
+                        </button>
+                      ) : (
+                        <div className="h-[260px] grid place-items-center text-sm text-neutral-500 bg-[#F9FAFB] rounded-xl border border-neutral-100">
+                          No plot yet
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-2xl border border-neutral-200 bg-white p-3">
+                      <div className="text-sm font-medium mb-2">QQ plot (log–log)</div>
+                      {plots.qq ? (
+                        <button
+                          type="button"
+                          onClick={() => plots.qq && openLightbox(plots.qq, "QQ plot (log–log)")}
+                          className="block w-full cursor-zoom-in"
+                          aria-label="Open QQ plot"
+                        >
+                          <img
+                            src={plots.qq}
+                            alt="QQ plot"
+                            className="w-full h-[260px] object-contain rounded-xl bg-[#F9FAFB] border border-neutral-100"
+                          />
+                        </button>
+                      ) : (
+                        <div className="h-[260px] grid place-items-center text-sm text-neutral-500 bg-[#F9FAFB] rounded-xl border border-neutral-100">
+                          No plot yet
+                        </div>
+                      )}
+                    </div>
+                  </section>
                 )}
               </section>
 
@@ -498,20 +752,31 @@ export default function ESRI3DComparisonApp() {
                 <InfoCard label="DL columns" value={dlColumns.length ? dlColumns.length : "—"} hint="After Load Data" />
                 <InfoCard label="Mappings complete" value={mappingComplete ? "Yes" : "No"} hint="Select all 3 per side" />
               </section>
+
+              {analysisRun && (
+                <div className="mt-6 flex justify-end">
+                  <button
+                    className="rounded-xl px-5 py-2.5 text-sm font-medium bg-[#7C3AED] text-white hover:bg-[#6D28D9] transition"
+                    onClick={() => setSection("comparisons")}
+                  >
+                    Go to Comparison
+                  </button>
+                </div>
+              )}
             </>
           )}
 
           {/* Comparisons */}
           {section === "comparisons" && (
             <>
-              <div className={comparisonControlsEnabled ? "" : "opacity-50 pointer-events-none"}>
+              <div className={analysisRun ? "" : "opacity-50 pointer-events-none"}>
                 <ControlsBar
                   method={method}
-                  onMethodChange={comparisonControlsEnabled ? setMethod : () => {}}
+                  onMethodChange={analysisRun ? setMethod as any : () => {}}
                   bins={bins}
-                  onBinsChange={comparisonControlsEnabled ? setBins : () => {}}
+                  onBinsChange={analysisRun ? setBins : () => {}}
                   gridSize={gridSize}
-                  onGridSizeChange={comparisonControlsEnabled ? setGridSize : () => {}}
+                  onGridSizeChange={analysisRun ? setGridSize : () => {}}
                 />
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
@@ -522,22 +787,36 @@ export default function ESRI3DComparisonApp() {
                   <button
                     type="button"
                     onClick={onRun}
-                    disabled={!readyToRun || !comparisonControlsEnabled}
-                    aria-disabled={!readyToRun || !comparisonControlsEnabled}
+                    disabled={!readyToRun || !analysisRun || !!runId}
+                    aria-disabled={!readyToRun || !analysisRun || !!runId}
                     className={
-                      "rounded-xl px-4 py-2 transition " +
-                      (readyToRun && comparisonControlsEnabled
+                      "rounded-xl px-4 py-2 transition flex items-center gap-2 " +
+                      (readyToRun && analysisRun && !runId
                         ? "bg-[#7C3AED] text-white hover:bg-[#6D28D9] shadow"
                         : "bg-neutral-200 text-neutral-500 cursor-not-allowed")
                     }
                   >
-                    {busyRun ? "Running…" : "Run Comparison"}
+                    Run Comparison
+                    {runId && (
+                      <span className="inline-flex items-center text-[#10B981] ml-2">
+                        <CheckCircle2 className="h-5 w-5" />
+                      </span>
+                    )}
                   </button>
+                  {runId && (
+                    <button
+                      type="button"
+                      className="ml-2 rounded-xl px-4 py-2 text-sm font-medium bg-neutral-200 text-neutral-700 hover:bg-neutral-300 transition"
+                      onClick={resetComparison}
+                    >
+                      Clear
+                    </button>
+                  )}
                   {runError && <span style={{ color: "#c00" }}>{runError}</span>}
                 </motion.div>
               </div>
               <section className="mt-8">
-                <h2 className="text-lg font-semibold mb-3">3D Plot</h2>
+                <h2 className="text-lg font-semibold mb-3">Plots (Original/ DL/ Comparison)</h2>
                 <motion.div
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -554,17 +833,27 @@ export default function ESRI3DComparisonApp() {
                 </motion.div>
               </section>
               {runId && (
-                <div style={{ marginTop: 16 }}>
-                  <ComparisonHeatmap
-                    runId={runId}
-                    apiBase="/api"
-                    method={(method ?? "max") as "max" | "mean" | "median" | "chi2"}
-                    thresholdMode="quantile"
-                    thresholdValue={0.9}
-                    width={900}
-                    cellSizePx={10}
-                  />
-                </div>
+                <>
+                  <div style={{ marginTop: 16 }}>
+                    <ComparisonHeatmap
+                      runId={runId}
+                      apiBase="/api"
+                      method={(method ?? "max") as "max" | "mean" | "median" | "chi2"}
+                      thresholdMode="quantile"
+                      thresholdValue={0.9}
+                      width={900}
+                      cellSizePx={10}
+                    />
+                  </div>
+                  <div className="mt-6 flex justify-end">
+                    <button
+                      className="rounded-xl px-5 py-2.5 text-sm font-medium bg-[#7C3AED] text-white hover:bg-[#6D28D9] transition"
+                      onClick={() => setSection("export")}
+                    >
+                      Go to Export (download CSV & plot)
+                    </button>
+                  </div>
+                </>
               )}
             </>
           )}
@@ -628,6 +917,52 @@ export default function ESRI3DComparisonApp() {
 
         <footer className="mx-auto max-w-6xl px-4 pb-10 pt-6 text-xs text-neutral-500" />
       </div>
+
+      {/* Lightbox modal */}
+      <AnimatePresence>
+        {lightboxOpen && lightboxSrc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm"
+            onClick={closeLightbox}
+            aria-modal="true"
+            role="dialog"
+          >
+            <div
+              className="absolute inset-0 flex items-center justify-center p-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 240, damping: 24 }}
+                className="relative w-full max-w-6xl"
+              >
+                <div className="mb-2 flex items-center justify-between text-white">
+                  <h3 className="text-sm md:text-base font-medium">{lightboxTitle}</h3>
+                  <button
+                    onClick={closeLightbox}
+                    className="inline-flex items-center rounded-xl bg-white/10 hover:bg-white/20 px-2 py-1"
+                    aria-label="Close"
+                  >
+                    <X className="h-5 w-5 text-white" />
+                  </button>
+                </div>
+                <div className="rounded-2xl bg-white p-2 md:p-3">
+                  <img
+                    src={lightboxSrc}
+                    alt={lightboxTitle}
+                    className="max-h-[80vh] w-full object-contain rounded-xl"
+                  />
+                </div>
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -686,12 +1021,12 @@ function UploadPanel({ step, title, subtitle, file, error, onClear, onDrop, onDr
         tabIndex={0}
         onClick={onBrowse}
         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onBrowse()}
-        aria-label="Upload .zip file"
+        aria-label="Upload .zip or .csv file"
       >
         <div className="px-6 py-10 text-center">
           <div className="mx-auto mb-4 h-12 w-12 rounded-2xl bg-[#7C3AED]/10 grid place-items-center text-[#7C3AED]"><Upload className="h-6 w-6" /></div>
-          <p className="text-sm font-semibold">Drag & drop a .zip here, or <span className="underline text-[#7C3AED]">browse</span></p>
-          <div className="mt-2 flex items-center justify-center gap-2 text-xs text-neutral-600"><Badge><FileArchive className="h-3.5 w-3.5" /> .zip only</Badge></div>
+          <p className="text-sm font-semibold">Drag & drop a .zip or .csv here, or <span className="underline text-[#7C3AED]">browse</span></p>
+          <div className="mt-2 flex items-center justify-center gap-2 text-xs text-neutral-600"><Badge><FileArchive className="h-3.5 w-3.5" /> .zip or .csv</Badge></div>
         </div>
         {children}
       </div>
@@ -760,7 +1095,9 @@ function ZipList({ title, progress, items, accent }: { title: string; progress: 
         </div>
         <ul className="mt-3 max-h-60 overflow-auto divide-y divide-neutral-100">
           {items.length === 0 ? (
-            <li className="py-3 text-xs text-neutral-500">Listing…</li>
+            progress === 100
+              ? <li className="py-3 text-xs text-neutral-500">Ready</li>
+              : <li className="py-3 text-xs text-neutral-500">Listing…</li>
           ) : (
             items.map((f, idx) => (
               <li key={idx} className="py-2 text-sm flex items-center gap-2">
@@ -776,42 +1113,40 @@ function ZipList({ title, progress, items, accent }: { title: string; progress: 
   );
 }
 
-/* Controls Bar */
-type ControlsBarProps = {
+/* Controls Bar (parser-friendly) */
+function ControlsBar(props: {
   method: null | "max" | "mean" | "median" | "chi2";
-  onMethodChange: (m: null | "max" | "mean" | "median" | "chi2") => void;
+  onMethodChange: (m: "max" | "mean" | "median" | "chi2") => void;
   bins: number;
   onBinsChange: (n: number) => void;
   gridSize: number | null;
   onGridSizeChange: (n: number | null) => void;
-};
+}) {
+  const { method, onMethodChange, bins, onBinsChange, gridSize, onGridSizeChange } = props;
 
-const METHOD_OPTIONS: Array<{ label: string; value: "max" | "mean" | "median" | "chi2" }> = [
-  { label: "max", value: "max" },
-  { label: "mean", value: "mean" },
-  { label: "median", value: "median" },
-  { label: "chi²", value: "chi2" },
-];
+  const METHOD_OPTIONS = [
+    { value: "mean", label: "Mean" },
+    { value: "median", label: "Median" },
+    { value: "max", label: "Max" },
+    { value: "chi2", label: "Chi²" },
+  ] as const;
 
-function ControlsBar({ method, onMethodChange, bins, onBinsChange, gridSize, onGridSizeChange }: ControlsBarProps) {
-  const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
-  const selectedIdx = method ? METHOD_OPTIONS.findIndex((o) => o.value === method) : -1;
+  const tabRefs = React.useRef<any[]>([]);
+  const selectedIdx = method ? METHOD_OPTIONS.findIndex(o => o.value === method) : -1;
 
   function handleTabKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    if (selectedIdx < 0) return;
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
       e.preventDefault();
       const dir = e.key === "ArrowRight" ? 1 : -1;
-      const current = selectedIdx >= 0 ? selectedIdx : 0;
-      let next = (current + dir + METHOD_OPTIONS.length) % METHOD_OPTIONS.length;
+      const next = (selectedIdx + dir + METHOD_OPTIONS.length) % METHOD_OPTIONS.length;
+      const m = METHOD_OPTIONS[next].value;
+      onMethodChange(m);
       tabRefs.current[next]?.focus();
-    }
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      if (selectedIdx >= 0) onMethodChange(METHOD_OPTIONS[selectedIdx].value);
     }
   }
 
-  const minGrid = 100, maxGrid = 900, stepGrid = 100;
+  const minGrid = 100, maxGrid = 1000, stepGrid = 50;
 
   return (
     <section className="mt-6 rounded-2xl border border-neutral-200 bg-white p-4 md:p-5">
@@ -824,19 +1159,16 @@ function ControlsBar({ method, onMethodChange, bins, onBinsChange, gridSize, onG
               return (
                 <button
                   key={opt.value}
-                  ref={(el) => { tabRefs.current[idx] = el; }}
+                  ref={el => (tabRefs.current[idx] = el)}
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  aria-pressed={active}
                   tabIndex={active || method === null ? 0 : -1}
                   onClick={() => onMethodChange(opt.value)}
                   onKeyDown={handleTabKeyDown}
                   className={
                     "px-3 py-1.5 h-9 rounded-xl text-sm font-medium transition " +
-                    (active
-                      ? "bg-[#7C3AED]/10 text-[#7C3AED] ring-2 ring-[#7C3AED] ring-offset-2 border border-[#7C3AED]"
-                      : "border border-neutral-300 text-neutral-700 hover:bg-neutral-100")
+                    (active ? "bg-[#7C3AED] text-white" : "border border-neutral-300 text-neutral-700 hover:bg-neutral-100")
                   }
                 >
                   {opt.label}
@@ -845,15 +1177,14 @@ function ControlsBar({ method, onMethodChange, bins, onBinsChange, gridSize, onG
             })}
             {method === "chi2" && (
               <div className="flex items-center ml-3">
-                <label htmlFor="chi2-bins" className="text-sm font-medium text-[#7C3AED] mr-2">Bins</label>
+                <label className="text-sm font-medium text-[#7C3AED] mr-2">Bins</label>
                 <input
-                  id="chi2-bins"
                   type="number"
-                  min={2}
+                  min={3}
+                  max={50}
                   value={bins}
                   onChange={(e) => onBinsChange(Number(e.target.value))}
-                  className="h-9 w-16 rounded-lg border border-neutral-300 px-2 text-sm font-medium text-[#7C3AED] focus-visible:ring-2 focus-visible:ring-[#7C3AED] focus-visible:ring-offset-2 outline-none"
-                  aria-label="Number of bins"
+                  className="h-9 w-16 rounded-lg border border-neutral-300 px-2 text-sm"
                 />
               </div>
             )}
@@ -862,21 +1193,16 @@ function ControlsBar({ method, onMethodChange, bins, onBinsChange, gridSize, onG
 
         <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-6 w-full md:justify-end">
           <div className="flex flex-col gap-1 min-w-[220px]">
-            <label htmlFor="grid-size-slider" className="text-sm font-medium text-neutral-700 mb-1">Grid Cell Size</label>
+            <label className="text-sm font-medium text-neutral-700 mb-1">Grid Cell Size</label>
             <div className="flex items-center gap-3">
               <input
-                id="grid-size-slider"
                 type="range"
                 min={minGrid}
                 max={maxGrid}
                 step={stepGrid}
                 value={gridSize ?? minGrid}
                 onChange={(e) => onGridSizeChange(Number(e.target.value))}
-                className="h-2 w-32 md:w-40 accent-[#7C3AED] rounded-lg border border-neutral-300 focus-visible:ring-2 focus-visible:ring-[#7C3AED] focus-visible:ring-offset-2"
-                aria-valuenow={gridSize ?? minGrid}
-                aria-valuemin={minGrid}
-                aria-valuemax={maxGrid}
-                aria-label="Grid cell size in meters"
+                className="w-40"
               />
               <input
                 type="number"
@@ -885,20 +1211,15 @@ function ControlsBar({ method, onMethodChange, bins, onBinsChange, gridSize, onG
                 step={stepGrid}
                 value={gridSize ?? ""}
                 onChange={(e) => {
-                  const raw = e.target.value;
-                  if (raw === "") { onGridSizeChange(null); return; }
-                  let v = Number(raw);
-                  if (isNaN(v)) return;
-                  v = Math.max(minGrid, Math.min(maxGrid, Math.round(v / stepGrid) * stepGrid));
-                  onGridSizeChange(v);
+                  const v = e.target.value === "" ? null : Number(e.target.value);
+                  if (v === null) onGridSizeChange(null);
+                  else onGridSizeChange(Math.max(minGrid, Math.min(maxGrid, v)));
                 }}
                 placeholder={`${minGrid}-${maxGrid}`}
-                className="h-9 w-24 rounded-lg border border-neutral-300 px-2 text-sm font-medium text-[#7C3AED] focus-visible:ring-2 focus-visible:ring-[#7C3AED] focus-visible:ring-offset-2 outline-none"
-                aria-label="Grid cell size in meters"
+                className="h-9 w-24 rounded-lg border border-neutral-300 px-2 text-sm"
               />
               <span className="text-sm text-neutral-700 font-medium">{gridSize !== null ? `${gridSize} m` : "-- m"}</span>
             </div>
-            <span className="text-xs text-neutral-500 mt-1">{gridSize !== null ? `≈ ${(gridSize * gridSize / 1_000_000).toFixed(2)} km²` : "Select a value"}</span>
           </div>
         </div>
       </div>
@@ -907,8 +1228,12 @@ function ControlsBar({ method, onMethodChange, bins, onBinsChange, gridSize, onG
 }
 
 /* Mapping Form */
-function MappingForm({ title, columns, mapping, onChange }: { title: string; columns: string[]; mapping: ColumnMapping; onChange: (next: ColumnMapping) => void; }) {
-  const setField = (key: RequiredFieldKey, value: string) => onChange({ ...mapping, [key]: value || undefined });
+function MappingForm({
+  title, columns, mapping, onChange
+}: { title: string; columns: string[]; mapping: ColumnMapping; onChange: (next: ColumnMapping) => void; }) {
+  const setField = (key: RequiredFieldKey, value: string) =>
+    onChange({ ...mapping, [key]: value || undefined });
+
   return (
     <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
       <div className="mb-3 font-medium">{title}</div>
@@ -924,7 +1249,7 @@ function MappingForm({ title, columns, mapping, onChange }: { title: string; col
                 onChange={(e) => setField(label as RequiredFieldKey, e.target.value)}
                 className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm"
               >
-                <option value="">—</option>
+                <option value="">Please select a column</option>
                 {columns.map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
@@ -947,3 +1272,9 @@ function InfoCard({ label, value, hint }: { label: string; value: React.ReactNod
     </div>
   );
 }
+
+const fmt = (v?: number | null) => {
+  if (typeof v !== "number" || !isFinite(v)) return "—";
+  const rounded = Math.round(v * 100) / 100;
+  return rounded % 1 === 0 ? String(rounded) : rounded.toFixed(2);
+};
