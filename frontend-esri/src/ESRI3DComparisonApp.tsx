@@ -319,37 +319,7 @@ export default function ESRI3DComparisonApp() {
     }
   }
 
-  async function onRun() {
-    setRunError(null);
-    setProgress({ original: 0, dl: 0 });
-    setUnzipping(false);
-    setRunId(null);
-
-    try {
-      if (!readyToRun) throw new Error("Complete uploads, load data, mappings, method and grid size first.");
-      setBusyRun(true);
-
-      renderPlaceholder3D();
-
-      const { run_id } = await createRun({
-        originalZip: originalZip!,
-        dlZip: dlZip!,
-        comparison_method: method!,
-      });
-      setRunId(run_id);
-      setSection("comparisons");
-    } catch (err: any) {
-      console.error("Run failed:", err);
-      const msg = typeof err?.message === "string" ? err.message : "Run failed. See console.";
-      setRunError(msg);
-      alert(msg);
-      setUnzipping(false);
-    } finally {
-      setBusyRun(false);
-    }
-  }
-
-  function onExport(type: "png" | "csv") {
+  async function onExport(type: "png" | "csv") {
     if (!runId) {
       alert("Nothing to export yet. Please run a comparison first.");
       return;
@@ -781,7 +751,7 @@ export default function ESRI3DComparisonApp() {
                 >
                   <button
                     type="button"
-                    onClick={onRun}
+                    onClick={() => {}}
                     disabled={!readyToRun || !analysisRun || !!runId}
                     aria-disabled={!readyToRun || !analysisRun || !!runId}
                     className={
