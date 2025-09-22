@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Upload, FileArchive, Trash2, CheckCircle2, AlertCircle, Sparkles, X, BarChart3, GitCompare, Download, Info, LayoutGrid } from "lucide-react";
 import JSZip from "jszip";
 import * as THREE from "three";
-import ComparisonHeatmap from "./components/ComparisonHeatmap";
 import { fetchColumns } from "./api/data";
 import { runSummary, runPlots } from "./api/analysis";
 
@@ -62,9 +61,8 @@ export default function ESRI3DComparisonApp() {
   const [plots, setPlots] = useState<{ original?: string; dl?: string; qq?: string }>({});
 
   // Comparison controls
-  const [method, setMethod] = useState<null | "max" | "mean" | "median" | "chi2">(null);
-  const [bins, setBins] = useState<number>(10);
-  const [gridSize, setGridSize] = useState<number | null>(null);
+  const [method, setMethod] = useState<null | "max" | "mean" | "median">(null);
+  const [gridSize, setGridSize] = useState<number | null>(100000);
 
   // Run state
   const [runId, setRunId] = useState<string | null>(null);
@@ -337,7 +335,6 @@ export default function ESRI3DComparisonApp() {
         originalZip: originalZip!,
         dlZip: dlZip!,
         comparison_method: method!,
-        chi2_bins: bins,
       });
       setRunId(run_id);
       setSection("comparisons");
@@ -389,7 +386,6 @@ export default function ESRI3DComparisonApp() {
   }
   function resetComparison() {
     setMethod(null);
-    setBins(10);
     setGridSize(null);
     setRunId(null);
     setRunError(null);
@@ -494,8 +490,9 @@ export default function ESRI3DComparisonApp() {
                   <StepItem number={2} title="DL ESRI" done={!!dlZip} />
                   <StepItem number={3} title="Mapping" done={analysisRun} />
                   <StepItem number={4} title="Method" done={method !== null} />
-                  <StepItem number={5} title="Grid Size" done={gridSize !== null && gridSize >= 100} />
-                  <StepItem number={6} title="Plot" done={!!runId} />
+                  {/* Remove grid size step here */}
+                  {/* <StepItem number={5} title="Grid Size" done={gridSize !== null && gridSize >= 100} /> */}
+                  <StepItem number={5} title="Plot" done={!!runId} />
                 </ol>
               </nav>
             )}
@@ -773,8 +770,6 @@ export default function ESRI3DComparisonApp() {
                 <ControlsBar
                   method={method}
                   onMethodChange={analysisRun ? setMethod as any : () => {}}
-                  bins={bins}
-                  onBinsChange={analysisRun ? setBins : () => {}}
                   gridSize={gridSize}
                   onGridSizeChange={analysisRun ? setGridSize : () => {}}
                 />
@@ -803,58 +798,26 @@ export default function ESRI3DComparisonApp() {
                       </span>
                     )}
                   </button>
-                  {runId && (
-                    <button
-                      type="button"
-                      className="ml-2 rounded-xl px-4 py-2 text-sm font-medium bg-neutral-200 text-neutral-700 hover:bg-neutral-300 transition"
-                      onClick={resetComparison}
-                    >
-                      Clear
-                    </button>
-                  )}
+                  {/* Enable Clear only if something is selected (method or gridSize) */}
+                  <button
+                    type="button"
+                    className={
+                      "ml-2 rounded-xl px-4 py-2 text-sm font-medium transition " +
+                      ((method !== null || gridSize !== null)
+                        ? "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                        : "bg-neutral-200 text-neutral-400 cursor-not-allowed")
+                    }
+                    onClick={resetComparison}
+                    disabled={!(method !== null || gridSize !== null)}
+                  >
+                    Clear
+                  </button>
                   {runError && <span style={{ color: "#c00" }}>{runError}</span>}
                 </motion.div>
               </div>
               <section className="mt-8">
                 <h2 className="text-lg font-semibold mb-3">Plots (Original/ DL/ Comparison)</h2>
-                <motion.div
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.4 }}
-                  id="plot-viewport"
-                  ref={plotRef}
-                  className="h-[460px] w-full rounded-3xl border border-neutral-200 bg-[#F9FAFB] shadow-md grid place-items-center text-center p-0"
-                >
-                  {!runId && (
-                    <div className="text-neutral-500 text-sm px-8 text-center">
-                      Your 3D visual will appear here after you click <span className="font-medium text-[#F59E0B]">Run Comparison</span>.
-                    </div>
-                  )}
-                </motion.div>
               </section>
-              {runId && (
-                <>
-                  <div style={{ marginTop: 16 }}>
-                    <ComparisonHeatmap
-                      runId={runId}
-                      apiBase="/api"
-                      method={(method ?? "max") as "max" | "mean" | "median" | "chi2"}
-                      thresholdMode="quantile"
-                      thresholdValue={0.9}
-                      width={900}
-                      cellSizePx={10}
-                    />
-                  </div>
-                  <div className="mt-6 flex justify-end">
-                    <button
-                      className="rounded-xl px-5 py-2.5 text-sm font-medium bg-[#7C3AED] text-white hover:bg-[#6D28D9] transition"
-                      onClick={() => setSection("export")}
-                    >
-                      Go to Export (download CSV & plot)
-                    </button>
-                  </div>
-                </>
-              )}
             </>
           )}
 
@@ -1115,20 +1078,17 @@ function ZipList({ title, progress, items, accent }: { title: string; progress: 
 
 /* Controls Bar (parser-friendly) */
 function ControlsBar(props: {
-  method: null | "max" | "mean" | "median" | "chi2";
-  onMethodChange: (m: "max" | "mean" | "median" | "chi2") => void;
-  bins: number;
-  onBinsChange: (n: number) => void;
+  method: null | "max" | "mean" | "median";
+  onMethodChange: (m: "max" | "mean" | "median") => void;
   gridSize: number | null;
   onGridSizeChange: (n: number | null) => void;
 }) {
-  const { method, onMethodChange, bins, onBinsChange, gridSize, onGridSizeChange } = props;
+  const { method, onMethodChange, gridSize, onGridSizeChange } = props;
 
   const METHOD_OPTIONS = [
     { value: "mean", label: "Mean" },
     { value: "median", label: "Median" },
     { value: "max", label: "Max" },
-    { value: "chi2", label: "Chi²" },
   ] as const;
 
   const tabRefs = React.useRef<any[]>([]);
@@ -1146,7 +1106,7 @@ function ControlsBar(props: {
     }
   }
 
-  const minGrid = 100, maxGrid = 1000, stepGrid = 50;
+  const minGrid = 100, maxGrid = 900000, stepGrid = 50;
 
   return (
     <section className="mt-6 rounded-2xl border border-neutral-200 bg-white p-4 md:p-5">
@@ -1175,19 +1135,6 @@ function ControlsBar(props: {
                 </button>
               );
             })}
-            {method === "chi2" && (
-              <div className="flex items-center ml-3">
-                <label className="text-sm font-medium text-[#7C3AED] mr-2">Bins</label>
-                <input
-                  type="number"
-                  min={3}
-                  max={50}
-                  value={bins}
-                  onChange={(e) => onBinsChange(Number(e.target.value))}
-                  className="h-9 w-16 rounded-lg border border-neutral-300 px-2 text-sm"
-                />
-              </div>
-            )}
           </div>
         </div>
 
