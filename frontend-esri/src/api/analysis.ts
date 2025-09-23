@@ -20,7 +20,10 @@ export async function runSummary(
   form.append("original_assay", originalAssay);
   form.append("dl_assay", dlAssay);
 
-  const res = await fetch(`${API}/api/analysis/summary`, { method: "POST", body: form });
+  const res = await fetch(`${API}/api/analysis/summary`, {
+    method: "POST",
+    body: form,
+  });
 
   // Defensive: read as text first to avoid JSON parse crashes masking the real error
   const text = await res.text();
@@ -55,7 +58,50 @@ export async function runPlots(
   form.append("original_assay", originalAssay);
   form.append("dl_assay", dlAssay);
 
-  const res = await fetch(`${API}/api/analysis/plots`, { method: "POST", body: form });
+  const res = await fetch(`${API}/api/analysis/plots`, {
+    method: "POST",
+    body: form,
+  });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function runComparison(
+  originalFile: File,
+  dlFile: File,
+  map: {
+    oN: string;
+    oE: string;
+    oA: string;
+    dN: string;
+    dE: string;
+    dA: string;
+  },
+  method: "mean" | "median" | "max",
+  gridSize: number
+) {
+  const fd = new FormData();
+  fd.append("original", originalFile);
+  fd.append("dl", dlFile);
+
+  // MUST match FastAPI field names exactly
+  fd.append("original_northing", map.oN);
+  fd.append("original_easting", map.oE);
+  fd.append("original_assay", map.oA);
+  fd.append("dl_northing", map.dN);
+  fd.append("dl_easting", map.dE);
+  fd.append("dl_assay", map.dA);
+
+  fd.append("method", method);
+  fd.append("grid_size", String(gridSize));
+
+  const res = await fetch(`${API}/api/analysis/comparison`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `Comparison failed (${res.status})`);
+  }
   return res.json();
 }
