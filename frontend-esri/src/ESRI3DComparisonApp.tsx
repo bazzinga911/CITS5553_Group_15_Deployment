@@ -445,6 +445,55 @@ export default function ESRI3DComparisonApp() {
     }
   }
 
+  // Run Comparison → same action pattern as Load Data / Run Analysis
+  async function handleRunComparison() {
+    if (
+      !readyToRun ||
+      !analysisRun ||
+      !originalZip ||
+      !dlZip ||
+      !method ||
+      !gridSize
+    ) {
+      alert(
+        "Complete the steps first: Load Data → Mappings → Run Analysis → pick Method & Grid."
+      );
+      return;
+    }
+
+    setCmpLoading(true);
+    setRunError(null);
+    setGridOut(null); // like starting fresh
+    try {
+      const map = {
+        oN: originalMap["Northing"]!,
+        oE: originalMap["Easting"]!,
+        oA: originalMap["Assay"]!,
+        dN: dlMap["Northing"]!,
+        dE: dlMap["Easting"]!,
+        dA: dlMap["Assay"]!,
+      };
+      const out = await runComparison(
+        originalZip,
+        dlZip,
+        map,
+        method,
+        gridSize
+      );
+      setGridOut(out);
+      setRunId("ok"); // mark success (enables Export etc.)
+      setToast({ msg: "Comparison complete. Heatmaps ready." });
+    } catch (e: any) {
+      console.error(e);
+      setRunError(
+        typeof e?.message === "string" ? e.message : "Comparison failed"
+      );
+      alert(e?.message || "Comparison failed");
+    } finally {
+      setCmpLoading(false);
+    }
+  }
+
   async function onExport(type: "png" | "csv") {
     if (!runId) {
       alert("Nothing to export yet. Please run a comparison first.");
@@ -990,73 +1039,41 @@ export default function ESRI3DComparisonApp() {
                 >
                   <button
                     type="button"
-                    onClick={async () => {
-                      if (
-                        !readyToRun ||
-                        !analysisRun ||
-                        !originalZip ||
-                        !dlZip ||
-                        !method ||
-                        !gridSize
-                      )
-                        return;
-                      setCmpLoading(true);
-                      try {
-                        const map = {
-                          oN: originalMap["Northing"]!,
-                          oE: originalMap["Easting"]!,
-                          oA: originalMap["Assay"]!,
-                          dN: dlMap["Northing"]!,
-                          dE: dlMap["Easting"]!,
-                          dA: dlMap["Assay"]!,
-                        };
-                        const out = await runComparison(
-                          originalZip,
-                          dlZip,
-                          map,
-                          method,
-                          gridSize
-                        );
-                        setGridOut(out);
-                        setRunId("ok"); // just to enable Export section in your UI
-                      } catch (e: any) {
-                        alert(e?.message || "Comparison failed");
-                      } finally {
-                        setCmpLoading(false);
-                      }
-                    }}
-                    disabled={!readyToRun || !analysisRun || !!runId}
-                    aria-disabled={!readyToRun || !analysisRun || !!runId}
+                    onClick={handleRunComparison}
+                    disabled={
+                      !readyToRun || !analysisRun || cmpLoading || !!runId
+                    }
                     className={
-                      "rounded-xl px-4 py-2 transition flex items-center gap-2 " +
-                      (readyToRun && analysisRun && !runId
-                        ? "bg-[#7C3AED] text-white hover:bg-[#6D28D9] shadow"
+                      "rounded-xl px-5 py-2.5 text-sm font-medium transition flex items-center gap-2 " +
+                      (readyToRun && analysisRun && !cmpLoading && !runId
+                        ? "bg-[#7C3AED] text-white hover:bg-[#6D28D9]"
                         : "bg-neutral-200 text-neutral-500 cursor-not-allowed")
                     }
                   >
                     {cmpLoading ? "Running…" : "Run Comparison"}
-                    {runId && (
+                    {runId && !cmpLoading && (
                       <span className="inline-flex items-center text-[#10B981] ml-2">
                         <CheckCircle2 className="h-5 w-5" />
                       </span>
                     )}
                   </button>
-                  {/* Enable Clear only if something is selected (method or gridSize) */}
+
                   <button
                     type="button"
-                    className={
-                      "ml-2 rounded-xl px-4 py-2 text-sm font-medium transition " +
-                      (method !== null || gridSize !== null
-                        ? "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
-                        : "bg-neutral-200 text-neutral-400 cursor-not-allowed")
-                    }
+                    className="ml-2 rounded-xl px-4 py-2 text-sm font-medium bg-neutral-200 text-neutral-700 hover:bg-neutral-300 transition"
                     onClick={resetComparison}
-                    disabled={!(method !== null || gridSize !== null)}
+                    disabled={
+                      cmpLoading ||
+                      (!runId && method === null && gridSize === null)
+                    }
                   >
                     Clear
                   </button>
+
                   {runError && (
-                    <span style={{ color: "#c00" }}>{runError}</span>
+                    <span className="text-red-600 text-sm ml-2">
+                      {runError}
+                    </span>
                   )}
                 </motion.div>
               </div>
@@ -1082,18 +1099,15 @@ export default function ESRI3DComparisonApp() {
                             type: "heatmap",
                             hoverongaps: false,
                             colorscale: "Viridis",
+                            zmin: POW_TICKS[0],
+                            zmax: POW_TICKS[POW_TICKS.length - 1],
                             colorbar: {
-                              title: "Te_ppm (log scale)",
+                              title: `Max ${
+                                originalMap.Assay || "Assay"
+                              } (log scale)`,
                               tickmode: "array",
-                              tickvals: [-2, -1, 0, 1, 2, 3],
-                              ticktext: [
-                                "0.01",
-                                "0.1",
-                                "1",
-                                "10",
-                                "100",
-                                "1000",
-                              ],
+                              tickvals: POW_TICKS as unknown as number[],
+                              ticktext: powTickText(POW_TICKS),
                               len: 0.8,
                               thickness: 24,
                               outlinewidth: 1,
@@ -1118,7 +1132,9 @@ export default function ESRI3DComparisonApp() {
                         ].filter(Boolean)}
                         layout={{
                           title: {
-                            text: "Original: Max Te_ppm",
+                            text: `Original: Max ${
+                              originalMap.Assay || "Assay"
+                            }`,
                             font: { size: 22 },
                             y: 0.95,
                           },
@@ -1145,18 +1161,15 @@ export default function ESRI3DComparisonApp() {
                             type: "heatmap",
                             hoverongaps: false,
                             colorscale: "Viridis",
+                            zmin: POW_TICKS[0],
+                            zmax: POW_TICKS[POW_TICKS.length - 1],
                             colorbar: {
-                              title: "Te_ppm (log scale)",
+                              title: `Max ${
+                                dlMap.Assay || "Assay"
+                              } (log scale)`,
                               tickmode: "array",
-                              tickvals: [-2, -1, 0, 1, 2, 3],
-                              ticktext: [
-                                "0.01",
-                                "0.1",
-                                "1",
-                                "10",
-                                "100",
-                                "1000",
-                              ],
+                              tickvals: POW_TICKS as unknown as number[],
+                              ticktext: powTickText(POW_TICKS),
                               len: 0.8,
                               thickness: 24,
                               outlinewidth: 1,
@@ -1177,7 +1190,7 @@ export default function ESRI3DComparisonApp() {
                         ].filter(Boolean)}
                         layout={{
                           title: {
-                            text: "DL: Max Te_ppm",
+                            text: `DL: Max ${dlMap.Assay || "Assay"}`,
                             font: { size: 22 },
                             y: 0.95,
                           },
@@ -1204,7 +1217,20 @@ export default function ESRI3DComparisonApp() {
                                 z: gridOut.cmp, // contains nulls for gaps
                                 type: "heatmap",
                                 hoverongaps: false,
-                                colorscale: "RdBu_r", // blue = positive, red = negative (matches the ref images)
+                                // Use custom colorscale for comparison plot
+                                colorscale: [
+                                  [0, "#a50026"],
+                                  [0.1, "#d73027"],
+                                  [0.2, "#f46d43"],
+                                  [0.3, "#fdae61"],
+                                  [0.4, "#fee090"],
+                                  [0.5, "#ffffbf"],
+                                  [0.6, "#e0f3f8"],
+                                  [0.7, "#abd9e9"],
+                                  [0.8, "#74add1"],
+                                  [0.9, "#4575b4"],
+                                  [1, "#313695"],
+                                ],
                                 zmin: -100,
                                 zmax: 100,
                                 zmid: 0,
@@ -1252,6 +1278,17 @@ export default function ESRI3DComparisonApp() {
                   </div>
                 )}
               </section>
+              {/* Go to Export button — show only after comparison done and plots are visible */}
+              {runId && gridOut && (
+                <div className="mt-6 flex justify-end">
+                  <button
+                    className="rounded-xl px-5 py-2.5 text-sm font-medium bg-[#7C3AED] text-white hover:bg-[#6D28D9] transition"
+                    onClick={() => setSection("export")}
+                  >
+                    Go to Export
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -1863,6 +1900,32 @@ const fmt = (v?: number | null) => {
 
 const PLOT_HEIGHT = 600; // match attached images
 
+// Use power-of-ten tick labels like 10⁻² … 10³
+const POW_TICKS = [-2, -1, 0, 1, 2, 3] as const;
+
+function superscript(n: number): string {
+  const map: Record<string, string> = {
+    "-": "⁻",
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+  };
+  return Array.from(String(n))
+    .map((ch) => map[ch] ?? ch)
+    .join("");
+}
+
+function powTickText(vals: readonly number[]) {
+  return vals.map((v) => `10${superscript(v)}`);
+}
+
 function axesLikeNotebook(gridOut: {
   xmin: number;
   ymin: number;
@@ -1872,32 +1935,37 @@ function axesLikeNotebook(gridOut: {
   cell_y: number;
   coord_units?: "meters" | "degrees";
 }) {
-  const meters = gridOut.coord_units === "meters";
-  const tickFmt = meters ? ".0e" : ".2f";
-
-  const base = {
-    showgrid: true,
-    gridcolor: "rgba(0,0,0,0.15)",
-    zeroline: false,
-    showline: true,
-    linecolor: "rgba(0,0,0,0.35)",
-    mirror: true,
-    tickformat: tickFmt,
-    tickangle: 0,
-  } as const;
-
-  // Compute axis ranges
+  const meters = gridOut.coord_units !== "degrees";
   const x0 = gridOut.xmin;
   const x1 = gridOut.xmin + gridOut.nx * gridOut.cell_x;
   const y0 = gridOut.ymin;
   const y1 = gridOut.ymin + gridOut.ny * gridOut.cell_y;
 
+  // meters → plain numbers with thousands separators; degrees → decimals
+  const tickFmt = meters ? ",.0f" : ".2f";
+
+  const base = {
+    ticks: "outside",
+    ticklen: 6,
+    tickwidth: 1,
+    tickformat: tickFmt,
+    separatethousands: true,
+    showgrid: true,
+    gridcolor: "rgba(0,0,0,0.15)",
+    gridwidth: 1,
+    zeroline: false,
+    showline: true,
+    linecolor: "rgba(0,0,0,0.35)",
+    linewidth: 1,
+    mirror: true,
+  } as const;
+
+  // Increase top margin to leave space between title and grid
   return {
     xaxis: {
       title: meters ? "Easting (m)" : "Longitude (°)",
       range: [x0, x1],
       ...base,
-      automargin: true,
     },
     yaxis: {
       title: meters ? "Northing (m)" : "Latitude (°)",
@@ -1905,8 +1973,7 @@ function axesLikeNotebook(gridOut: {
       scaleanchor: "x",
       scaleratio: 1,
       ...base,
-      automargin: true,
     },
-    margin: { l: 80, r: 40, b: 60, t: 60 },
+    margin: { l: 76, r: 76, b: 62, t: 90 }, // t: 90 leaves more space above grid for title
   };
 }

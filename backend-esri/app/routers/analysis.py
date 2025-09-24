@@ -9,6 +9,7 @@ import pandas as pd
 from app.services.io_service import dataframe_from_upload, dataframe_from_upload_cols  # NEW
 from pydantic import BaseModel
 from app.services.comparisons import COMPARISON_METHODS
+from pyproj import Transformer 
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -157,13 +158,13 @@ async def comparison(
     dl_assay: str          = Form(...),
     method: Literal["mean","median","max"] = Form(...),
     grid_size: float       = Form(...),
+    treat_as: Literal["auto","meters","degrees"] = Form("auto"),
 ):
     try:
-        # 1) read only needed columns
+        # 1) Read & clean
         df_o = dataframe_from_upload_cols(original, [original_easting, original_northing, original_assay])
         df_d = dataframe_from_upload_cols(dl,       [dl_easting,       dl_northing,       dl_assay])
 
-        # 2) coerce + clean
         df_o = _to_float(df_o, [original_easting, original_northing, original_assay])
         df_d = _to_float(df_d, [dl_easting, dl_northing, dl_assay])
         df_o = df_o[df_o[original_assay] > 0]
@@ -171,57 +172,68 @@ async def comparison(
         if df_o.empty or df_d.empty:
             raise ValueError("No valid rows after cleaning (assay <= 0 removed).")
 
-        # 3) common grid meta (auto-handle lon/lat vs meters)
-        e_all = pd.concat([df_o[original_easting], df_d[dl_easting]], ignore_index=True)
-        n_all = pd.concat([df_o[original_northing], df_d[dl_northing]], ignore_index=True)
+        # 2) Decide units, and project to meters if inputs are degrees
+        looks_deg = _looks_like_degrees(
+            pd.concat([df_o[original_easting], df_d[dl_easting]], ignore_index=True),
+            pd.concat([df_o[original_northing], df_d[dl_northing]], ignore_index=True),
+        )
+        use_degrees = (treat_as == "degrees") or (treat_as == "auto" and looks_deg)
 
-        cell_x = cell_y = float(grid_size)  # meters by default
-        coord_units = "meters"
-        mean_lat = None
-        if _looks_like_degrees(e_all, n_all):
-            mean_lat = float(n_all.mean())
-            rad = np.deg2rad(mean_lat)
-            deg_lat = grid_size / 111_320.0
-            deg_lon = grid_size / (111_320.0 * max(np.cos(rad), 1e-6))
-            cell_x, cell_y = deg_lon, deg_lat
-            coord_units = "degrees"
+        if use_degrees:
+            # Project lon/lat (EPSG:4326) → meters (EPSG:3577)
+            transformer = Transformer.from_crs("EPSG:4326", "EPSG:3577", always_xy=True)
+            ex_o, ny_o = transformer.transform(df_o[original_easting].values, df_o[original_northing].values)
+            ex_d, ny_d = transformer.transform(df_d[dl_easting].values,       df_d[dl_northing].values)
+            df_o["__E_m"], df_o["__N_m"] = ex_o, ny_o
+            df_d["__E_m"], df_d["__N_m"] = ex_d, ny_d
+            e_col_o, n_col_o = "__E_m", "__N_m"
+            e_col_d, n_col_d = "__E_m", "__N_m"
+            coord_units = "meters"
+        else:
+            # Already meters
+            e_col_o, n_col_o = original_easting, original_northing
+            e_col_d, n_col_d = dl_easting,       dl_northing
+            coord_units = "meters"
 
+        # 3) Grid meta (meters)
+        cell_x = cell_y = float(grid_size)
+        e_all = pd.concat([df_o[e_col_o], df_d[e_col_d]], ignore_index=True)
+        n_all = pd.concat([df_o[n_col_o], df_d[n_col_d]], ignore_index=True)
         xmin, ymin, nx, ny = _grid_meta_xy(e_all, n_all, cell_x, cell_y)
 
-        # 4) index into grid + rename assay → Te_ppm for comparisons.py
-        o_idx = _index_cols_xy(df_o, original_easting, original_northing, xmin, ymin, cell_x, cell_y)\
+        # 4) Index + rename assay → Te_ppm
+        o_idx = _index_cols_xy(df_o, e_col_o, n_col_o, xmin, ymin, cell_x, cell_y)\
                   .rename(columns={original_assay: "Te_ppm"})
-        d_idx = _index_cols_xy(df_d, dl_easting,       dl_northing,       xmin, ymin, cell_x, cell_y)\
+        d_idx = _index_cols_xy(df_d, e_col_d, n_col_d, xmin, ymin, cell_x, cell_y)\
                   .rename(columns={dl_assay: "Te_ppm"})
 
-        # 5) compute arrays (DL − Original) via registry
-        fn = COMPARISON_METHODS[method]   # 'mean' | 'median' | 'max' registered here
-        arr_orig, arr_dl, arr_cmp = fn(d_idx, o_idx, nx, ny)  # returns (orig, dl, cmp). 
+        # 5) Compute arrays via registry
+        fn = COMPARISON_METHODS[method]
+        arr_orig, arr_dl, arr_cmp = fn(d_idx, o_idx, nx, ny)
 
-        # 6) downsample points for overlay
+        # 6) Downsample overlay points (in meters)
         def _downsample(df, n=5000):
             return df.sample(n=min(n, len(df)), random_state=42)
-        o_pts = _downsample(o_idx)[[original_easting, original_northing]].values.tolist()
-        d_pts = _downsample(d_idx)[[dl_easting,       dl_northing      ]].values.tolist()
+        o_pts = _downsample(o_idx)[[e_col_o, n_col_o]].values.tolist()
+        d_pts = _downsample(d_idx)[[e_col_d, n_col_d]].values.tolist()
 
-        # 7) centers for axes
+        # 7) Grid centers (meters)
         x = (xmin + (np.arange(nx) + 0.5) * cell_x).tolist()
         y = (ymin + (np.arange(ny) + 0.5) * cell_y).tolist()
 
-        # 8) make arrays JSON-safe (NaN → null)
+        # 8) JSON-safe arrays
         def _to_jsonable(a: np.ndarray):
             return [[(float(v) if np.isfinite(v) else None) for v in row] for row in a]
 
-        # 9) return a DICT (not a list!) — this is where the bracket mismatch happened
         return {
             "nx": nx, "ny": ny,
             "xmin": float(xmin), "ymin": float(ymin),
-            "cell": float(grid_size),        # keep slider units (meters) for info
-            "cell_x": float(cell_x),         # width in axis units (deg or m)
-            "cell_y": float(cell_y),         # height in axis units (deg or m)
+            "cell": float(grid_size),
+            "cell_x": float(cell_x),
+            "cell_y": float(cell_y),
             "x": x, "y": y,
             "coord_units": coord_units,
-            "mean_lat": float(mean_lat) if mean_lat is not None else None,
+            "mean_lat": None,
             "orig": _to_jsonable(arr_orig),
             "dl":   _to_jsonable(arr_dl),
             "cmp":  _to_jsonable(arr_cmp),
@@ -230,3 +242,4 @@ async def comparison(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
