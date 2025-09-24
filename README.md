@@ -89,16 +89,16 @@ uvicorn app.main:app --reload
 ### 4. Structure
 
 ```
-backend/
- ├─ app/
- │   ├─ main.py             # FastAPI entrypoint & router registration
- │   ├─ models/schemas.py   # Pydantic models for API responses
- │   ├─ routers/
- │   │   ├─ data.py         # /api/data endpoints (column extraction)
- │   │   └─ analysis.py     # /api/analysis endpoints (stats & plots)
- │   └─ services/
- │       └─ io_service.py   # CSV/ZIP parsing, encoding detection, DataFrame utils
- ├─ requirements.txt
+backend-esri/
+ app/
+ ├─ main.py           # FastAPI app & router registration
+ ├─ routers/
+ │   ├─ data.py       # /api/data endpoints (column extraction)
+ │   └─ analysis.py   # /api/analysis (stats, plots, comparison)
+ ├─ services/
+ │   ├─ io_service.py # CSV/ZIP parsing, encoding detection, DataFrame utils
+ │   └─ comparisons.py# grid stat methods (mean, median, max)
+ └─ schemas.py        # Pydantic models (if used)
 ```
 
 ### 5. Key API endpoints
@@ -106,6 +106,7 @@ backend/
 * `POST /api/data/columns` — extract column names from CSV/ZIP
 * `POST /api/analysis/summary` — get stats (count, mean, median, max, std)
 * `POST /api/analysis/plots` — histograms + QQ plot as base64 PNGs
+* `POST /api/analysis/comparison` — grid meta + arrays
 * `GET /api/health` — backend health check
 
 ### 6. Common issues
