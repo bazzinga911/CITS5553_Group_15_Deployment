@@ -1,12 +1,16 @@
 // frontend-esri/src/api/data.ts
+// Same-origin "/api/*" calls so Render Static Site can rewrite to the backend.
+// For local dev, set vite.config.ts proxy:
+//   server: { proxy: { "/api": "http://127.0.0.1:8000" } }
+
 export type ColumnsResponse = {
   original_columns: string[];
   dl_columns: string[];
-  // include if your backend returns it; otherwise it's fine to omit
-  run_token?: string;
+  run_token?: string; // optional, backend may include
 };
 
-const API = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+// API base — empty string means use absolute /api/... paths
+const API = "";
 
 export async function fetchColumns(
   originalFile: File,
@@ -20,6 +24,9 @@ export async function fetchColumns(
     method: "POST",
     body: form,
   });
-  if (!res.ok) throw new Error(await res.text());
+
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
   return res.json() as Promise<ColumnsResponse>;
 }
