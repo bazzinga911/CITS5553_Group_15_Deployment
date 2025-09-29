@@ -24,8 +24,8 @@ app.add_middleware(
 #   /api/analysis/summary
 #   /api/analysis/plots
 #   /api/analysis/comparison
-app.include_router(data.router, prefix="/api/data", tags=["data"])
-app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
+app.include_router(data.router, prefix="/api/data")
+app.include_router(analysis.router, prefix="/api/analysis")
 
 # Health check
 @app.get("/api/health", tags=["meta"])
