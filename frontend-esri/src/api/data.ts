@@ -1,14 +1,20 @@
 // frontend-esri/src/api/data.ts
-// Same host base via VITE_API_BASE; keep /api/... in paths.
+// Use VITE_API_BASE as the backend ROOT (no /api suffix).
+// Examples:
+//   VITE_API_BASE=https://cits5553-group-15-deployment.onrender.com
+//   (local) falls back to http://localhost:8000
 
 export type ColumnsResponse = {
   original_columns: string[];
   dl_columns: string[];
-  run_token?: string; // optional, backend may include
+  run_token?: string;
 };
 
-const API =
+const API_BASE =
   (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
+
+// normalize: remove trailing slashes
+const API = API_BASE.replace(/\/+$/, "");
 
 export async function fetchColumns(
   originalFile: File,
@@ -23,8 +29,6 @@ export async function fetchColumns(
     body: form,
   });
 
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
+  if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<ColumnsResponse>;
 }
