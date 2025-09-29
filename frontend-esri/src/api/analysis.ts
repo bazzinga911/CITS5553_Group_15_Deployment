@@ -1,10 +1,11 @@
 // frontend-esri/src/api/analysis.ts
-// Uses VITE_API_BASE for backend host. Keep /api/... in paths.
-// On Render Static Site set: VITE_API_BASE=https://cits5553-group-15-deployment.onrender.com
-// Local dev falls back to http://localhost:8000
+// Use VITE_API_BASE as the backend ROOT (no /api suffix).
 
-const API =
+const API_BASE =
   (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
+
+// normalize: remove trailing slashes
+const API = API_BASE.replace(/\/+$/, "");
 
 export type Summary = {
   count: number;
@@ -18,7 +19,7 @@ type SummaryResponse = { original: Summary; dl: Summary };
 
 async function fetchJSON(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
-  const text = await res.text(); // read as text first for clearer errors
+  const text = await res.text();
   if (!res.ok) throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
   try {
     return JSON.parse(text);
