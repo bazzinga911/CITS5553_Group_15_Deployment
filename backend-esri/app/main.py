@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import data, analysis
 
-app = FastAPI()
+app = FastAPI(title="ESRI Comparison API")
 
 # Allow frontend (Render static site) + local dev
 ALLOWED_ORIGINS = [
@@ -19,16 +19,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
-app.include_router(data.router)
-app.include_router(analysis.router)
+# Mount routers with API prefixes so frontend calls match:
+#   /api/data/columns
+#   /api/analysis/summary
+#   /api/analysis/plots
+#   /api/analysis/comparison
+app.include_router(data.router, prefix="/api/data", tags=["data"])
+app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 
-# Health check (keep it under /api to match your style)
-@app.get("/api/health")
+# Health check
+@app.get("/api/health", tags=["meta"])
 def health():
     return {"ok": True}
 
-# Optional root (so hitting / doesn’t just 404)
-@app.get("/")
+# Optional root to avoid 404 at /
+@app.get("/", include_in_schema=False)
 def root():
     return {"ok": True, "docs": "/docs", "health": "/api/health"}
