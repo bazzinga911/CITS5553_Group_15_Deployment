@@ -1,9 +1,10 @@
-// frontend-esri/src/api/runs.ts
-// Uses a same-origin "/api/*" path so Render Static Site can rewrite to the backend.
-// In local dev, add this to vite.config.ts:
-//   server: { proxy: { "/api": "http://127.0.0.1:8000" } }
+// frontend-esri/src/api/analysis.ts
+// Uses VITE_API_BASE for backend host. Keep /api/... in paths.
+// On Render Static Site set: VITE_API_BASE=https://cits5553-group-15-deployment.onrender.com
+// Local dev falls back to http://localhost:8000
 
-const API = "https://cits5553-group-15-deployment.onrender.com/api";
+const API =
+  (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
 
 export type Summary = {
   count: number;
@@ -17,11 +18,8 @@ type SummaryResponse = { original: Summary; dl: Summary };
 
 async function fetchJSON(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
-  const text = await res.text(); // read as text first for better error messages
-
-  if (!res.ok) {
-    throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
-  }
+  const text = await res.text(); // read as text first for clearer errors
+  if (!res.ok) throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
   try {
     return JSON.parse(text);
   } catch {
@@ -64,7 +62,6 @@ export async function runPlots(
   form.append("original_assay", originalAssay);
   form.append("dl_assay", dlAssay);
 
-  // This endpoint returns JSON directly; no need for the text-first dance here.
   const res = await fetch(`${API}/api/analysis/plots`, {
     method: "POST",
     body: form,
@@ -108,7 +105,6 @@ export async function runComparison(
   });
 
   if (!res.ok) {
-    // Try to pull FastAPI's JSON error detail; fall back to status text
     const err = await res.json().catch(() => ({} as any));
     throw new Error(err?.detail ?? `Comparison failed (${res.status} ${res.statusText})`);
   }
