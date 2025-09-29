@@ -3,7 +3,7 @@
 // In local dev, add this to vite.config.ts:
 //   server: { proxy: { "/api": "http://127.0.0.1:8000" } }
 
-const API = ""; // keep endpoints absolute like "/api/…"
+const API = "https://cits5553-group-15-deployment.onrender.com/api";
 
 export type Summary = {
   count: number;
