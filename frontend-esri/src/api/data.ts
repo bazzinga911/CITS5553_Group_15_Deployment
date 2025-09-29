@@ -9,8 +9,8 @@ export type ColumnsResponse = {
   run_token?: string; // optional, backend may include
 };
 
-// API base — empty string means use absolute /api/... paths
-const API = "";
+const API = "https://cits5553-group-15-deployment.onrender.com/api";
+
 
 export async function fetchColumns(
   originalFile: File,
